@@ -1,0 +1,440 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>Calculator</title>
+<style>
+@font-face{font-family:'Space Grotesk';src:url('fonts/SpaceGrotesk.ttf');font-weight:300 700;font-display:swap}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html,body{margin:0;height:100%;background:#000;color:#fff;font-family:'Space Grotesk',system-ui,-apple-system,'Segoe UI',Roboto,sans-serif;overflow:hidden;-webkit-user-select:none;user-select:none}
+button{font-family:inherit}
+a{color:#fff;text-decoration:none}
+.screen{position:fixed;left:0;top:0;right:0;bottom:0;display:none;flex-direction:column;background:#000;overflow-y:auto}
+.screen.on{display:flex}
+
+/* ---------- calculator ---------- */
+#calc{padding:0 24px 24px;overflow:hidden}
+.disp{flex:1;min-height:0;display:flex;flex-direction:column;justify-content:flex-end;align-items:flex-end;padding:0 4px 24px}
+.expr{height:22px;font-size:17px;font-weight:300;letter-spacing:.06em}
+.num{font-weight:300;line-height:1.1;letter-spacing:-.03em;font-variant-numeric:tabular-nums}
+.keys{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:14px}
+.k{height:min(75px,9.6vh);border-radius:38px;font:400 30px 'Space Grotesk',system-ui,sans-serif;cursor:pointer;border:1.5px solid #fff;background:#000;color:#fff;padding:0;transition:background .14s,color .14s,transform .14s}
+.k:active{background:#fff;color:#000;transform:scale(.94)}
+.k-fn{outline:1px solid #fff;outline-offset:-7px;font-size:24px;font-weight:500}
+.k-op{background:#fff;color:#000;font-size:34px;font-weight:500}
+.k-op:active{background:#000;color:#fff}
+.k-on{background:#000;color:#fff}
+.k-wide{grid-column:span 2;text-align:left;padding-left:30px}
+
+/* ---------- shared ---------- */
+.pad{padding:28px 24px 24px}
+h1{margin:0;font-size:36px;font-weight:500;letter-spacing:-.02em}
+.pill{transition:background .15s,color .15s;cursor:pointer}
+.pill:hover,.pill:active{background:#fff;color:#000}
+.btn{transition:background .15s,color .15s,transform .15s;cursor:pointer}
+.btn:active{transform:scale(.97)}
+.btn:hover{background:#fff;color:#000}
+.nav{display:flex;gap:12px}
+.nav a,.nav button{flex:1;display:flex;align-items:center;justify-content:center;height:52px;border-radius:26px;font-size:13px;font-weight:700;letter-spacing:.16em;border:1.5px solid #fff;background:#000;color:#fff;cursor:pointer}
+.nav .cur{background:#fff;color:#000}
+.scan{position:absolute;left:0;top:0;right:0;bottom:0;background:repeating-linear-gradient(0deg,rgba(0,0,0,0) 0 2px,#000 2px 3px)}
+@keyframes rise{from{opacity:0;transform:translateY(16px)}to{opacity:1;transform:none}}
+@keyframes pulse{0%,100%{transform:scale(1)}50%{transform:scale(1.7)}}
+@keyframes reveal{from{opacity:0;transform:scale(1.03)}to{opacity:1;transform:none}}
+@keyframes sweep{from{top:0}to{top:calc(100% - 2px)}}
+@keyframes focus{0%,100%{transform:scale(1.04)}50%{transform:scale(1)}}
+.rise{animation:rise .6s cubic-bezier(.2,.7,.2,1) both}
+.pulse{animation:pulse 1.6s ease-in-out infinite}
+
+/* ---------- breach log ---------- */
+.head{display:flex;align-items:flex-start;justify-content:space-between}
+.sub0{margin-top:6px;font-size:14px;font-weight:300;letter-spacing:.04em}
+.lock{display:inline-flex;align-items:center;height:44px;padding:0 20px;border:1.5px solid #fff;border-radius:22px;font-size:14px;font-weight:500;letter-spacing:.08em;background:#000;color:#fff}
+.list{margin-top:28px;display:flex;flex-direction:column;gap:14px}
+.card{display:flex;align-items:center;gap:16px;padding:14px;border:1.5px solid #fff;border-radius:22px;background:#000;color:#fff;text-align:left;width:100%;cursor:pointer;transition:background .15s,color .15s}
+.card:hover,.card:active{background:#fff;color:#000}
+.thumb{position:relative;width:76px;height:76px;border:1px solid #fff;border-radius:14px;overflow:hidden;flex:none;background:#000}
+img:not([src]){visibility:hidden}
+.thumb img{position:absolute;left:0;top:0;width:100%;height:100%;object-fit:cover;filter:grayscale(1)}
+.card .t{font-size:28px;font-weight:500;letter-spacing:-.02em;font-variant-numeric:tabular-nums}
+.card .d{margin-top:2px;font-size:14px;font-weight:400}
+.card .p{margin-top:6px;font-size:12px;font-weight:300;letter-spacing:.04em}
+.new{display:flex;align-items:center;gap:6px;padding:3px 9px;border:1px solid currentColor;border-radius:12px;font-size:10px;font-weight:700;letter-spacing:.16em}
+.new i{display:block;width:6px;height:6px;border-radius:3px;background:currentColor}
+.empty{padding:40px 0;text-align:center;font-size:14px;font-weight:300;letter-spacing:.06em}
+.bottom{margin-top:auto;padding-top:20px}
+
+/* ---------- capture ---------- */
+.dhead{display:flex;align-items:center;justify-content:space-between;height:44px}
+.back{display:inline-flex;align-items:center;gap:8px;font-size:14px;font-weight:500;letter-spacing:.08em;background:none;border:0;color:#fff;cursor:pointer;padding:0;height:44px}
+.photo{position:relative;margin-top:14px;width:100%;max-width:342px;align-self:center;aspect-ratio:342/372;border:1.5px solid #fff;border-radius:22px;overflow:hidden;background:#000;animation:reveal .8s cubic-bezier(.2,.7,.2,1) both}
+.photo img{position:absolute;left:0;top:0;width:100%;height:100%;object-fit:cover;filter:grayscale(1)}
+.sweep{position:absolute;left:0;top:0;width:100%;height:2px;background:#fff;animation:sweep 3.6s linear infinite}
+.frame{position:absolute;left:14px;top:14px;right:14px;bottom:14px;animation:focus 3s ease-in-out infinite}
+.frame b{position:absolute;width:26px;height:26px;border:0 solid #fff}
+.tag{position:absolute;padding:5px 10px;background:#000;border:1px solid #fff;border-radius:12px;font-size:10px;font-weight:700;letter-spacing:.16em}
+.rows{margin-top:16px}
+.row{display:flex;align-items:center;justify-content:space-between;gap:12px;height:46px;border-bottom:1px solid #fff}
+.row .l{font-size:11px;font-weight:500;letter-spacing:.2em}
+.row .v{font-size:16px;font-variant-numeric:tabular-nums}
+.actions{display:flex;gap:12px}
+.actions button{flex:1;height:54px;border:1.5px solid #fff;border-radius:27px;font-size:13px;font-weight:700;letter-spacing:.16em}
+.solid{background:#fff;color:#000}
+.solid:hover{background:#000;color:#fff}
+.ghost{background:#000;color:#fff}
+
+/* ---------- settings ---------- */
+.srows{margin-top:28px;border-top:1px solid #fff}
+.srow{display:flex;align-items:center;justify-content:space-between;gap:16px;min-height:68px;border-bottom:1px solid #fff}
+.srow .n{font-size:17px;font-weight:500}
+.srow .s{margin-top:3px;font-size:13px;font-weight:300;letter-spacing:.04em}
+.small{height:38px;padding:0 16px;border:1.5px solid #fff;border-radius:19px;background:#000;color:#fff;font-size:13px;font-weight:700;letter-spacing:.12em}
+.sw{position:relative;width:52px;height:30px;border-radius:15px;border:1.5px solid #fff;background:#000;padding:0;cursor:pointer;flex:none;transition:background .2s}
+.sw::after{content:"";position:absolute;top:3px;left:3px;width:21px;height:21px;border-radius:50%;background:#fff;transition:transform .2s,background .2s}
+.sw[aria-checked="true"]{background:#fff}
+.sw[aria-checked="true"]::after{transform:translateX(22px);background:#000}
+.step{display:flex;align-items:center;gap:12px}
+.step button{width:38px;height:38px;border:1.5px solid #fff;border-radius:19px;background:#000;color:#fff;font-size:20px;padding:0}
+.step span{min-width:14px;text-align:center;font-size:20px;font-weight:500}
+.wipe{width:100%;height:54px;border:1.5px solid #fff;border-radius:27px;background:#000;color:#fff;font-size:13px;font-weight:700;letter-spacing:.16em}
+.credit{margin:22px 0 4px;text-align:center;font-size:12px;font-weight:300;letter-spacing:.08em}
+</style>
+</head>
+<body>
+
+<!-- Calculator (the disguise) -->
+<div id="calc" class="screen on">
+  <div class="disp">
+    <div class="expr" id="expr"></div>
+    <div class="num" id="display" aria-live="polite">0</div>
+  </div>
+  <div class="keys" id="keys"></div>
+</div>
+
+<!-- Breach log -->
+<div id="log" class="screen pad">
+  <div class="head">
+    <div>
+      <h1>Breach log</h1>
+      <div class="sub0" id="logsub"></div>
+    </div>
+    <button class="lock pill" id="lockbtn">LOCK</button>
+  </div>
+  <div class="list" id="list"></div>
+  <div class="bottom">
+    <div class="nav">
+      <a class="cur" id="navlog">LOG</a>
+      <button id="navset">SETTINGS</button>
+    </div>
+  </div>
+</div>
+
+<!-- Capture -->
+<div id="detail" class="screen pad">
+  <div class="dhead">
+    <button class="back" id="back" aria-label="Back to log">
+      <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 5l-7 7 7 7"/></svg>
+      LOG
+    </button>
+    <div style="font-size:11px;font-weight:500;letter-spacing:.32em" id="dno">CAPTURE 01</div>
+  </div>
+  <div class="photo">
+    <img id="dimg" alt="Captured photo, black and white">
+    <div class="scan"></div>
+    <div class="sweep"></div>
+    <div class="frame">
+      <b style="left:0;top:0;border-left-width:2px;border-top-width:2px"></b>
+      <b style="right:0;top:0;border-right-width:2px;border-top-width:2px"></b>
+      <b style="left:0;bottom:0;border-left-width:2px;border-bottom-width:2px"></b>
+      <b style="right:0;bottom:0;border-right-width:2px;border-bottom-width:2px"></b>
+    </div>
+    <div class="tag" style="left:22px;top:22px;display:flex;align-items:center;gap:8px"><span class="pulse" style="display:block;width:6px;height:6px;border-radius:3px;background:#fff"></span>FRONT CAM</div>
+    <div class="tag" style="right:22px;bottom:22px;font-size:12px;font-weight:500;letter-spacing:.08em;font-variant-numeric:tabular-nums" id="dstamp"></div>
+  </div>
+  <div class="rows">
+    <div class="row"><div class="l">TIME</div><div class="v" id="dtime"></div></div>
+    <div class="row"><div class="l">DATE</div><div class="v" id="ddate"></div></div>
+    <div class="row"><div class="l">PLACE</div><div class="v" id="dplace"></div></div>
+    <div class="row"><div class="l">CODES</div><div class="v" id="dcodes"></div></div>
+  </div>
+  <div class="bottom">
+    <div class="actions">
+      <button class="btn solid" id="dsave">SAVE</button>
+      <button class="btn ghost" id="ddel">DELETE</button>
+    </div>
+  </div>
+</div>
+
+<!-- Settings -->
+<div id="settings" class="screen pad">
+  <h1>Settings</h1>
+  <div class="srows rise">
+    <div class="srow">
+      <div><div class="n">Secret code</div><div class="s">Typed on the calculator, then =</div></div>
+      <button class="small btn" id="chcode">CHANGE</button>
+    </div>
+    <div class="srow">
+      <div><div class="n">Silent capture</div><div class="s">No sound, no flash, no preview</div></div>
+      <button class="sw" role="switch" aria-checked="true" aria-label="Silent capture" data-key="silent"></button>
+    </div>
+    <div class="srow">
+      <div><div class="n">Capture after</div><div class="s">Wrong codes before the shot</div></div>
+      <div class="step">
+        <button class="btn" id="aminus" aria-label="Fewer attempts">&minus;</button>
+        <span id="acount">1</span>
+        <button class="btn" id="aplus" aria-label="More attempts">+</button>
+      </div>
+    </div>
+    <div class="srow">
+      <div><div class="n">Save location</div><div class="s">Attach coordinates to each capture</div></div>
+      <button class="sw" role="switch" aria-checked="true" aria-label="Save location" data-key="loc"></button>
+    </div>
+    <div class="srow">
+      <div><div class="n">Fingerprint for log</div><div class="s">Second lock on the breach log</div></div>
+      <button class="sw" role="switch" aria-checked="true" aria-label="Fingerprint for log" data-key="fp"></button>
+    </div>
+    <div class="srow">
+      <div><div class="n">Disguise</div><div class="s">Icon and name on the home screen</div></div>
+      <div style="font-size:14px;font-weight:500;letter-spacing:.08em">CALCULATOR</div>
+    </div>
+  </div>
+  <div class="bottom">
+    <div class="credit">Developed by Hicham Essenouci</div>
+    <button class="wipe btn" id="wipe">WIPE ALL CAPTURES</button>
+    <div class="nav" style="margin-top:14px">
+      <button id="navlog2">LOG</button>
+      <a class="cur">SETTINGS</a>
+    </div>
+  </div>
+</div>
+
+<script>
+(function () {
+  // Browser preview fallback (when not running inside the Android app).
+  var A = window.Android;
+  if (!A) {
+    var mock = { codeLen: 4, silent: true, loc: true, fp: true, attempts: 1, captures: [
+      { id: '3', ts: Date.now() - 600000, tries: 2, seen: false, place: '36.75° N · 3.06° E' },
+      { id: '2', ts: Date.now() - 86400000 * 2, tries: 1, seen: true, place: 'No location' }
+    ] };
+    A = {
+      getState: function () { return JSON.stringify(mock); },
+      verify: function (c) { return c === '1234' ? 'ok' : 'wrong'; },
+      unlock: function () { window.showVault(); },
+      photo: function () { return ''; }, markSeen: function () {}, deleteCapture: function () {},
+      saveCapture: function () {}, setBool: function (k, v) { mock[k] = v; },
+      setAttempts: function (n) { mock.attempts = n; }, changeCode: function () {}, wipe: function () {}
+    };
+  }
+
+  var S = { codeLen: 4, silent: true, loc: true, fp: true, attempts: 1, captures: [] };
+  var cur = 'calc', dIndex = 0;
+  function $(id) { return document.getElementById(id); }
+  function load() { try { S = JSON.parse(A.getState()); } catch (e) {} }
+
+  var DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+  var MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  function p2(n) { return (n < 10 ? '0' : '') + n; }
+  function hm(ts) { var d = new Date(ts); return p2(d.getHours()) + ':' + p2(d.getMinutes()); }
+  function hms(ts) { var d = new Date(ts); return hm(ts) + ':' + p2(d.getSeconds()); }
+  function dayLabel(ts) {
+    var d = new Date(ts), n = new Date();
+    if (d.toDateString() === n.toDateString()) return 'Today';
+    return DAYS[d.getDay()] + ' ' + d.getDate() + ' ' + MONTHS[d.getMonth()];
+  }
+  function fullDate(ts) {
+    var d = new Date(ts);
+    return DAYS[d.getDay()] + ' ' + d.getDate() + ' ' + MONTHS[d.getMonth()] + ' ' + d.getFullYear();
+  }
+
+  function show(id) {
+    cur = id;
+    var all = document.querySelectorAll('.screen');
+    for (var i = 0; i < all.length; i++) all[i].classList.toggle('on', all[i].id === id);
+    if (id === 'log') renderLog();
+    if (id === 'settings') renderSettings();
+    if (id === 'detail') renderDetail();
+  }
+
+  /* ---------------- calculator ---------------- */
+  var cs;
+  function resetCalc() { cs = { cur: '0', prev: null, op: null, fresh: false, expr: '' }; }
+  resetCalc();
+  function fmt(n) {
+    if (!isFinite(n)) return 'Error';
+    var s = String(parseFloat(Number(n).toPrecision(9)));
+    if (s.indexOf('e') !== -1) return Number(n).toExponential(3);
+    return s;
+  }
+  function calc(a, op, b) {
+    if (op === '+') return a + b;
+    if (op === '−') return a - b;
+    if (op === '×') return a * b;
+    return b === 0 ? NaN : a / b;
+  }
+  function press(k) {
+    var s = cs;
+    if (s.cur === 'Error' && k !== 'AC') return;
+    if (k === 'AC') { resetCalc(); return draw(); }
+    if (k === '±') { if (s.cur !== '0') s.cur = s.cur.charAt(0) === '-' ? s.cur.slice(1) : '-' + s.cur; return draw(); }
+    if (k === '%') { s.cur = fmt(parseFloat(s.cur) / 100); s.fresh = true; return draw(); }
+    if (k === '.') {
+      if (s.fresh) { s.cur = '0.'; s.fresh = false; }
+      else if (s.cur.indexOf('.') === -1) s.cur += '.';
+      return draw();
+    }
+    if (k === '=') {
+      if (s.op === null || s.prev === null) {
+        // A code-length whole number followed by "=" is a secret-code attempt.
+        if (!s.fresh && /^\d+$/.test(s.cur) && s.cur.length === S.codeLen) {
+          if (A.verify(s.cur) === 'ok') { resetCalc(); draw(); A.unlock(); return; }
+        }
+        return;
+      }
+      var r = calc(parseFloat(s.prev), s.op, parseFloat(s.cur));
+      s.expr = s.prev + ' ' + s.op + ' ' + s.cur + ' =';
+      s.cur = fmt(r); s.prev = null; s.op = null; s.fresh = true;
+      return draw();
+    }
+    if (['÷', '×', '−', '+'].indexOf(k) !== -1) {
+      var c = s.cur;
+      if (s.op !== null && s.prev !== null && !s.fresh) c = fmt(calc(parseFloat(s.prev), s.op, parseFloat(s.cur)));
+      s.prev = c; s.cur = c; s.op = k; s.fresh = true; s.expr = c + ' ' + k;
+      return draw();
+    }
+    if (s.fresh || s.cur === '0') { s.cur = k; s.fresh = false; }
+    else if (s.cur.replace(/[-.]/g, '').length < 9) s.cur += k;
+    draw();
+  }
+  var LAYOUT = [['AC', '±', '%', '÷'], ['7', '8', '9', '×'], ['4', '5', '6', '−'], ['1', '2', '3', '+'], ['0', '.', '=']];
+  var NAMES = { '÷': 'Divide', '×': 'Multiply', '−': 'Subtract', '+': 'Add', '=': 'Equals', '.': 'Decimal point', '±': 'Toggle sign', '%': 'Percent', 'AC': 'All clear' };
+  var FN = ['AC', '±', '%'], OP = ['÷', '×', '−', '+', '='];
+  function buildKeys() {
+    var host = $('keys'); host.innerHTML = '';
+    LAYOUT.forEach(function (row) {
+      row.forEach(function (k) {
+        var kind = OP.indexOf(k) !== -1 ? 'op' : (FN.indexOf(k) !== -1 ? 'fn' : 'num');
+        var b = document.createElement('button');
+        b.className = 'k k-' + kind + (k === '0' ? ' k-wide' : '');
+        b.setAttribute('data-k', k);
+        b.setAttribute('aria-label', NAMES[k] || k);
+        b.textContent = k;
+        b.addEventListener('click', function () { press(k); });
+        host.appendChild(b);
+      });
+    });
+  }
+  function draw() {
+    $('display').textContent = cs.cur;
+    $('expr').textContent = cs.expr;
+    var len = cs.cur.length;
+    $('display').style.fontSize = (len <= 6 ? 88 : (len === 7 ? 76 : (len === 8 ? 66 : 58))) + 'px';
+    var keys = document.querySelectorAll('.k-op');
+    for (var i = 0; i < keys.length; i++) {
+      var k = keys[i].getAttribute('data-k');
+      keys[i].classList.toggle('k-on', k !== '=' && cs.op === k && cs.fresh);
+    }
+  }
+
+  /* ---------------- breach log ---------------- */
+  function renderLog() {
+    var caps = S.captures || [];
+    $('logsub').textContent = caps.length + (caps.length === 1 ? ' capture' : ' captures');
+    var html = '';
+    if (!caps.length) html = '<div class="empty">No captures yet</div>';
+    caps.forEach(function (c, i) {
+      html += '<button class="card rise" data-i="' + i + '" style="animation-delay:' + (i * 90) + 'ms">' +
+        '<div class="thumb"><img alt="" data-id="' + c.id + '"><div class="scan"></div></div>' +
+        '<div style="flex:1;min-width:0">' +
+        '<div style="display:flex;align-items:center;gap:10px"><div class="t">' + hm(c.ts) + '</div>' +
+        (c.seen ? '' : '<div class="new"><i class="pulse"></i>NEW</div>') + '</div>' +
+        '<div class="d">' + dayLabel(c.ts) + '</div>' +
+        '<div class="p">' + c.place + ' · ' + c.tries + (c.tries === 1 ? ' wrong code' : ' wrong codes') + '</div>' +
+        '</div></button>';
+    });
+    $('list').innerHTML = html;
+    var cards = $('list').querySelectorAll('.card');
+    for (var j = 0; j < cards.length; j++) {
+      (function (el) { el.addEventListener('click', function () { dIndex = +el.getAttribute('data-i'); show('detail'); }); })(cards[j]);
+    }
+    var imgs = $('list').querySelectorAll('img[data-id]');
+    for (var m = 0; m < imgs.length; m++) {
+      (function (img, n) {
+        setTimeout(function () {
+          var d = A.photo(img.getAttribute('data-id'), 200);
+          if (d) img.src = d;
+        }, 30 * n);
+      })(imgs[m], m);
+    }
+  }
+
+  /* ---------------- capture detail ---------------- */
+  function renderDetail() {
+    var c = (S.captures || [])[dIndex];
+    if (!c) return show('log');
+    $('dno').textContent = 'CAPTURE ' + p2(dIndex + 1);
+    $('dimg').removeAttribute('src');
+    var pic = A.photo(c.id, 700);
+    if (pic) $('dimg').src = pic;
+    $('dstamp').textContent = hms(c.ts);
+    $('dtime').textContent = hms(c.ts);
+    $('ddate').textContent = fullDate(c.ts);
+    $('dplace').textContent = c.place;
+    $('dcodes').textContent = c.tries + (c.tries === 1 ? ' wrong attempt' : ' wrong attempts');
+    if (!c.seen) { A.markSeen(c.id); c.seen = true; }
+  }
+
+  /* ---------------- settings ---------------- */
+  function renderSettings() {
+    var sw = document.querySelectorAll('.sw');
+    for (var i = 0; i < sw.length; i++) sw[i].setAttribute('aria-checked', S[sw[i].getAttribute('data-key')] ? 'true' : 'false');
+    $('acount').textContent = S.attempts;
+  }
+
+  /* ---------------- wiring ---------------- */
+  window.showVault = function () { load(); show('log'); };
+  window.lock = function () { resetCalc(); draw(); show('calc'); };
+  window.refresh = function () {
+    load();
+    if (cur === 'detail') cur = 'log';
+    show(cur);
+  };
+  window.goBack = function () {
+    if (cur === 'detail' || cur === 'settings') { show('log'); return true; }
+    if (cur === 'log') { window.lock(); return true; }
+    return false;
+  };
+
+  $('lockbtn').addEventListener('click', window.lock);
+  $('navset').addEventListener('click', function () { show('settings'); });
+  $('navlog2').addEventListener('click', function () { show('log'); });
+  $('back').addEventListener('click', function () { show('log'); });
+  $('dsave').addEventListener('click', function () { var c = S.captures[dIndex]; if (c) A.saveCapture(c.id); });
+  $('ddel').addEventListener('click', function () {
+    var c = S.captures[dIndex];
+    if (!c) return;
+    A.deleteCapture(c.id);
+    load(); show('log');
+  });
+  $('chcode').addEventListener('click', function () { A.changeCode(); });
+  $('wipe').addEventListener('click', function () { A.wipe(); });
+  $('aminus').addEventListener('click', function () { S.attempts = Math.max(1, S.attempts - 1); A.setAttempts(S.attempts); renderSettings(); });
+  $('aplus').addEventListener('click', function () { S.attempts = Math.min(5, S.attempts + 1); A.setAttempts(S.attempts); renderSettings(); });
+  var sws = document.querySelectorAll('.sw');
+  for (var i = 0; i < sws.length; i++) {
+    (function (el) {
+      el.addEventListener('click', function () {
+        var key = el.getAttribute('data-key');
+        S[key] = !S[key];
+        A.setBool(key, S[key]);
+        renderSettings();
+      });
+    })(sws[i]);
+  }
+
+  buildKeys(); load(); draw();
+})();
+</script>
+</body>
+</html>

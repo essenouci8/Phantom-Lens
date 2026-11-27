@@ -1,0 +1,4 @@
+<resources>
+    <!-- The home-screen name is the disguise ("Calculator"), matching the Settings screen. -->
+    <string name="app_name">Calculator</string>
+</resources>
