@@ -19,6 +19,8 @@ import android.net.Uri;
 import android.os.Bundle;
 import android.os.CancellationSignal;
 import android.provider.MediaStore;
+import android.security.keystore.KeyGenParameterSpec;
+import android.security.keystore.KeyProperties;
 import android.text.InputType;
 import android.util.Base64;
 import android.webkit.JavascriptInterface;
@@ -27,13 +29,21 @@ import android.webkit.WebView;
 import android.widget.EditText;
 import android.widget.Toast;
 
+import com.google.android.gms.tasks.Tasks;
+import com.google.mlkit.vision.common.InputImage;
+import com.google.mlkit.vision.face.Face;
+import com.google.mlkit.vision.face.FaceDetection;
+import com.google.mlkit.vision.face.FaceDetector;
+import com.google.mlkit.vision.face.FaceDetectorOptions;
+
 import org.json.JSONArray;
 import org.json.JSONObject;
 
 import java.io.ByteArrayOutputStream;
 import java.io.File;
-import java.io.FileOutputStream;
 import java.io.OutputStream;
+import java.nio.file.Files;
+import java.security.KeyStore;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
@@ -41,14 +51,21 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executor;
 import java.util.concurrent.TimeUnit;
 
+import javax.crypto.Cipher;
+import javax.crypto.KeyGenerator;
+import javax.crypto.SecretKey;
+import javax.crypto.spec.GCMParameterSpec;
+
 /**
  * Phantom Lens. A WebView shows the designed screens (assets/index.html); this class is the
- * bridge: it checks the secret code, takes the silent front-camera photo on a wrong code, stores
- * the captures privately on the device and protects the breach log with the fingerprint.
+ * bridge: it checks the secret code, takes the silent front-camera photo on a wrong code (up to
+ * three frames, keeping the one with a face), encrypts every photo with a key that never leaves
+ * the device's secure hardware, and protects the breach log with the fingerprint.
  */
 public class MainActivity extends Activity {
 
     private static final String DEFAULT_CODE = "1234";
+    private static final String KEY_ALIAS = "pl_key";
 
     private WebView web;
     private SharedPreferences prefs;
@@ -134,6 +151,50 @@ public class MainActivity extends Activity {
                 Math.abs(lat), lat >= 0 ? "N" : "S", Math.abs(lon), lon >= 0 ? "E" : "W");
     }
 
+    // ---------------------------------------------------------------- encryption (Android Keystore, AES-256-GCM)
+
+    private SecretKey key() throws Exception {
+        KeyStore ks = KeyStore.getInstance("AndroidKeyStore");
+        ks.load(null);
+        if (!ks.containsAlias(KEY_ALIAS)) {
+            KeyGenerator kg = KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, "AndroidKeyStore");
+            kg.init(new KeyGenParameterSpec.Builder(KEY_ALIAS,
+                    KeyProperties.PURPOSE_ENCRYPT | KeyProperties.PURPOSE_DECRYPT)
+                    .setBlockModes(KeyProperties.BLOCK_MODE_GCM)
+                    .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE)
+                    .setKeySize(256)
+                    .build());
+            return kg.generateKey();
+        }
+        return (SecretKey) ks.getKey(KEY_ALIAS, null);
+    }
+
+    private byte[] encrypt(byte[] plain) throws Exception {
+        Cipher c = Cipher.getInstance("AES/GCM/NoPadding");
+        c.init(Cipher.ENCRYPT_MODE, key());
+        byte[] iv = c.getIV();
+        byte[] ct = c.doFinal(plain);
+        byte[] out = new byte[iv.length + ct.length];
+        System.arraycopy(iv, 0, out, 0, iv.length);
+        System.arraycopy(ct, 0, out, iv.length, ct.length);
+        return out;
+    }
+
+    private byte[] decrypt(byte[] data) throws Exception {
+        Cipher c = Cipher.getInstance("AES/GCM/NoPadding");
+        c.init(Cipher.DECRYPT_MODE, key(), new GCMParameterSpec(128, data, 0, 12));
+        return c.doFinal(data, 12, data.length - 12);
+    }
+
+    /** Returns the plain JPEG bytes of a capture (encrypted .enc, or an older plain .jpg). */
+    private byte[] readImage(String id) throws Exception {
+        File enc = new File(dir, id + ".enc");
+        if (enc.exists()) return decrypt(Files.readAllBytes(enc.toPath()));
+        File jpg = new File(dir, id + ".jpg");
+        if (jpg.exists()) return Files.readAllBytes(jpg.toPath());
+        return null;
+    }
+
     // ---------------------------------------------------------------- capture
 
     private double[] lastLocation() {
@@ -154,6 +215,30 @@ public class MainActivity extends Activity {
         }
     }
 
+    /** Rotates upright, scales to at most 1280 px and re-encodes as JPEG. */
+    private byte[] prepare(byte[] raw, int rotation) {
+        Bitmap bm = BitmapFactory.decodeByteArray(raw, 0, raw.length);
+        if (bm == null) return null;
+        Matrix m = new Matrix();
+        m.postRotate(rotation);
+        float sc = Math.min(1f, 1280f / Math.max(bm.getWidth(), bm.getHeight()));
+        m.postScale(sc, sc);
+        Bitmap r = Bitmap.createBitmap(bm, 0, 0, bm.getWidth(), bm.getHeight(), m, true);
+        ByteArrayOutputStream bo = new ByteArrayOutputStream();
+        r.compress(Bitmap.CompressFormat.JPEG, 90, bo);
+        return bo.toByteArray();
+    }
+
+    private int countFaces(FaceDetector det, byte[] jpeg) {
+        try {
+            Bitmap b = BitmapFactory.decodeByteArray(jpeg, 0, jpeg.length);
+            List<Face> faces = Tasks.await(det.process(InputImage.fromBitmap(b, 0)), 8, TimeUnit.SECONDS);
+            return faces.size();
+        } catch (Throwable t) {
+            return 0;
+        }
+    }
+
     private void captureAsync(final int tries) {
         if (checkSelfPermission(Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) return;
         final boolean silent = prefs.getBoolean("silent", true);
@@ -163,6 +248,7 @@ public class MainActivity extends Activity {
 
         new Thread(() -> {
             Camera cam = null;
+            FaceDetector det = null;
             try {
                 Camera.CameraInfo info = new Camera.CameraInfo();
                 int id = -1;
@@ -183,28 +269,52 @@ public class MainActivity extends Activity {
                 Camera.Parameters p = cam.getParameters();
                 Camera.Size best = null;
                 for (Camera.Size sz : p.getSupportedPictureSizes()) {
-                    if (sz.width <= 1600 && (best == null || sz.width * sz.height > best.width * best.height)) {
+                    if (sz.width <= 2048 && (best == null || sz.width * sz.height > best.width * best.height)) {
                         best = sz;
                     }
                 }
                 if (best != null) p.setPictureSize(best.width, best.height);
-                p.setJpegQuality(85);
+                p.setJpegQuality(92);
                 cam.setParameters(p);
                 cam.setPreviewTexture(new SurfaceTexture(10));
                 cam.startPreview();
                 Thread.sleep(800); // let exposure settle
 
-                final CountDownLatch latch = new CountDownLatch(1);
-                final byte[][] out = new byte[1][];
-                cam.takePicture(null, null, (data, c) -> {
-                    out[0] = data;
-                    latch.countDown();
-                });
-                latch.await(6, TimeUnit.SECONDS);
+                det = FaceDetection.getClient(new FaceDetectorOptions.Builder()
+                        .setPerformanceMode(FaceDetectorOptions.PERFORMANCE_MODE_FAST)
+                        .build());
 
-                if (out[0] != null) storeCapture(out[0], info.orientation, ts, tries, loc);
+                byte[] chosen = null;
+                int faces = 0;
+                for (int shot = 0; shot < 3; shot++) {
+                    final CountDownLatch latch = new CountDownLatch(1);
+                    final byte[][] out = new byte[1][];
+                    cam.takePicture(null, null, (data, c) -> {
+                        out[0] = data;
+                        latch.countDown();
+                    });
+                    latch.await(6, TimeUnit.SECONDS);
+                    if (out[0] == null) break;
+                    byte[] jpeg = prepare(out[0], info.orientation);
+                    if (jpeg == null) break;
+                    int n = countFaces(det, jpeg);
+                    if (chosen == null || n > faces) {
+                        chosen = jpeg;
+                        faces = n;
+                    }
+                    if (n > 0) break; // a face is in frame, good enough
+                    cam.startPreview();
+                    Thread.sleep(500);
+                }
+                if (chosen != null) storeCapture(chosen, ts, tries, loc, faces);
             } catch (Throwable ignored) {
             } finally {
+                if (det != null) {
+                    try {
+                        det.close();
+                    } catch (Throwable ignored) {
+                    }
+                }
                 if (cam != null) {
                     try {
                         cam.release();
@@ -215,21 +325,13 @@ public class MainActivity extends Activity {
         }).start();
     }
 
-    private void storeCapture(byte[] jpeg, int rotation, long ts, int tries, double[] loc) throws Exception {
-        Bitmap bm = BitmapFactory.decodeByteArray(jpeg, 0, jpeg.length);
-        if (bm == null) return;
-        Matrix m = new Matrix();
-        m.postRotate(rotation);
-        float sc = Math.min(1f, 960f / Math.max(bm.getWidth(), bm.getHeight()));
-        m.postScale(sc, sc);
-        Bitmap r = Bitmap.createBitmap(bm, 0, 0, bm.getWidth(), bm.getHeight(), m, true);
-        try (FileOutputStream fo = new FileOutputStream(new File(dir, ts + ".jpg"))) {
-            r.compress(Bitmap.CompressFormat.JPEG, 85, fo);
-        }
+    private void storeCapture(byte[] jpeg, long ts, int tries, double[] loc, int faces) throws Exception {
+        Files.write(new File(dir, ts + ".enc").toPath(), encrypt(jpeg));
         JSONObject o = new JSONObject();
         o.put("id", String.valueOf(ts));
         o.put("ts", ts);
         o.put("tries", tries);
+        o.put("faces", faces);
         o.put("seen", false);
         if (loc != null) {
             o.put("hasLoc", true);
@@ -346,20 +448,20 @@ public class MainActivity extends Activity {
         @JavascriptInterface
         public String photo(String id, int maxW) {
             if (!validId(id)) return "";
-            File f = new File(dir, id + ".jpg");
-            if (!f.exists()) return "";
             try {
+                byte[] bytes = readImage(id);
+                if (bytes == null) return "";
                 BitmapFactory.Options o = new BitmapFactory.Options();
                 o.inJustDecodeBounds = true;
-                BitmapFactory.decodeFile(f.getAbsolutePath(), o);
+                BitmapFactory.decodeByteArray(bytes, 0, bytes.length, o);
                 int sample = 1;
                 while (o.outWidth / (sample * 2) >= maxW) sample *= 2;
                 BitmapFactory.Options o2 = new BitmapFactory.Options();
                 o2.inSampleSize = sample;
-                Bitmap bm = BitmapFactory.decodeFile(f.getAbsolutePath(), o2);
+                Bitmap bm = BitmapFactory.decodeByteArray(bytes, 0, bytes.length, o2);
                 if (bm == null) return "";
                 ByteArrayOutputStream bo = new ByteArrayOutputStream();
-                bm.compress(Bitmap.CompressFormat.JPEG, 80, bo);
+                bm.compress(Bitmap.CompressFormat.JPEG, 85, bo);
                 return "data:image/jpeg;base64," + Base64.encodeToString(bo.toByteArray(), Base64.NO_WRAP);
             } catch (Throwable t) {
                 return "";
@@ -398,26 +500,25 @@ public class MainActivity extends Activity {
                 }
             }
             //noinspection ResultOfMethodCallIgnored
+            new File(dir, id + ".enc").delete();
+            //noinspection ResultOfMethodCallIgnored
             new File(dir, id + ".jpg").delete();
         }
 
         @JavascriptInterface
         public void saveCapture(String id) {
             if (!validId(id)) return;
-            File f = new File(dir, id + ".jpg");
-            if (!f.exists()) return;
             try {
+                byte[] bytes = readImage(id);
+                if (bytes == null) throw new Exception("missing");
                 ContentValues v = new ContentValues();
                 v.put(MediaStore.Images.Media.DISPLAY_NAME, "PhantomLens_" + id + ".jpg");
                 v.put(MediaStore.Images.Media.MIME_TYPE, "image/jpeg");
                 v.put(MediaStore.Images.Media.RELATIVE_PATH, "Pictures/PhantomLens");
                 Uri uri = getContentResolver().insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, v);
                 if (uri == null) throw new Exception("insert failed");
-                try (OutputStream os = getContentResolver().openOutputStream(uri);
-                     java.io.FileInputStream in = new java.io.FileInputStream(f)) {
-                    byte[] buf = new byte[8192];
-                    int n;
-                    while ((n = in.read(buf)) > 0) os.write(buf, 0, n);
+                try (OutputStream os = getContentResolver().openOutputStream(uri)) {
+                    os.write(bytes);
                 }
                 toast("Saved to Pictures/PhantomLens");
             } catch (Throwable t) {
